@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>手表点选工具</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px;background:#12151c;color:#e8ecf4;
+       font:14px/1.6 -apple-system,"Microsoft YaHei",sans-serif}
+  h1{font-size:17px;margin:0 0 4px}
+  .sub{color:#8b95a5;font-size:12px;margin-bottom:16px}
+  .row{display:flex;gap:20px;flex-wrap:wrap}
+  #stage{position:relative;flex:0 0 auto;border:2px solid #2a3140;border-radius:8px;
+         overflow:hidden;cursor:crosshair;background:#000}
+  #stage img{display:block;width:466px;height:466px;image-rendering:pixelated}
+  #marker{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;
+          border:2px solid #4ea8ff;border-radius:50%;pointer-events:none;
+          display:none;box-shadow:0 0 0 2px rgba(78,168,255,.3)}
+  #marker::before,#marker::after{content:"";position:absolute;background:#4ea8ff}
+  #marker::before{left:50%;top:-8px;width:1px;height:8px}
+  #marker::after{top:50%;left:-8px;height:1px;width:8px}
+  .panel{flex:1;min-width:320px}
+  .coord{font:600 20px/1 ui-monospace,Consolas,monospace;color:#4ea8ff;
+         margin-bottom:4px}
+  .note{color:#8b95a5;font-size:12px;margin-bottom:14px}
+  label{display:block;font-size:12px;color:#8b95a5;margin-bottom:4px}
+  input[type=text],textarea{width:100%;padding:9px 11px;border-radius:8px;
+    border:1px solid #2a3140;background:#0d1016;color:#e8ecf4;font:inherit;outline:none}
+  input:focus,textarea:focus{border-color:#4ea8ff}
+  textarea{min-height:150px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .btn{margin-top:12px;display:flex;gap:8px}
+  button{flex:1;padding:10px;border-radius:8px;border:none;font:600 13px/1 inherit;
+         cursor:pointer}
+  .pri{background:#4ea8ff;color:#04121f}
+  .sec{background:#1a1f28;color:#e8ecf4;border:1px solid #2a3140}
+  button:active{opacity:.75}
+  .points{margin-top:14px}
+  .pt{display:flex;align-items:center;gap:8px;padding:7px 10px;margin-bottom:6px;
+      background:#1a1f28;border:1px solid #2a3140;border-radius:8px;font-size:12px}
+  .pt .nm{flex:0 0 auto;color:#e8ecf4}
+  .pt .xy{font-family:ui-monospace,Consolas,monospace;color:#8b95a5;flex:1}
+  .pt button{flex:0 0 auto;padding:4px 9px;font-size:11px;background:#2a3140;color:#e8ecf4}
+  .hint{background:#1a2432;border:1px solid #2c4a6e;border-radius:8px;padding:10px 12px;
+        font-size:12px;color:#9fc4ea;margin-top:14px;line-height:1.6}
+  .quick{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:6px}
+  .quick button{
+    padding:11px 8px;border-radius:9px;border:1px solid #2a3140;background:#1a2029;
+    color:#e8ecf4;font:600 13px/1.2 inherit;cursor:pointer;
+  }
+  .quick button:active{background:#2a3444;transform:scale(.97)}
+  .quick button.dis{opacity:.4}
+  .cfgbar{
+    background:#1a2432;border:1px solid #2c4a6e;border-radius:8px;
+    padding:8px 12px;font-size:12px;color:#9fc4ea;margin-bottom:14px;
+    display:flex;gap:16px;flex-wrap:wrap;align-items:center;
+  }
+  .cfgbar .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .cfgbar .ok{background:#3fb950}
+  .cfgbar .bad{background:#f85149}
+  code{background:#0d1016;padding:1px 5px;border-radius:4px;color:#7dd3fc;
+       font-family:ui-monospace,Consolas,monospace}
+</style>
+</head>
+<body>
+<h1>⌚ 手表点选工具</h1>
+<div class="sub">在左边图片上点你要按的位置，坐标会自动记录（按手表实际像素）</div>
+
+<div id="cfgbar" class="cfgbar">正在读取配置…</div>
+
+<div class="row">
+  <div id="stage">
+    <img id="shot" src="watch_now.png" alt="手表截图">
+    <div id="marker"></div>
+  </div>
+
+  <div class="panel">
+    <label>当前坐标</label>
+    <div class="coord" id="coord">— 点一下图片 —</div>
+    <div class="note">X 向右增大，Y 向下增大。圆屏中心约 (233, 233)</div>
+
+    <label>这个点叫什么</label>
+    <input type="text" id="pname" placeholder="比如：QQ 登录按钮">
+
+    <div class="btn">
+      <button class="pri" id="add">记录这个点</button>
+      <button class="sec" id="clear">清空全部</button>
+    </div>
+
+    <div class="points" id="points"></div>
+
+    <label style="margin-top:14px">快捷按钮（点一下直接按到手表上）</label>
+    <div class="quick" id="quick"></div>
+
+    <label style="margin-top:16px">生成的点（可复制）</label>
+    <textarea id="out" readonly></textarea>
+
+    <div class="hint">
+      记录好后点 <b>应用到手表</b>：会依次执行 <code>adb shell input tap X Y</code>。
+      如果只想点最后一个点，用 <code>只点最后这个</code>。
+    </div>
+
+    <div class="btn">
+      <button class="pri" id="applyLast">只点最后这个</button>
+      <button class="sec" id="applyAll">依次全点</button>
+    </div>
+
+    <div class="btn">
+      <button class="sec" id="savePts">💾 保存点位</button>
+      <button class="sec" id="loadPts">📂 载入点位</button>
+    </div>
+
+    <div class="btn">
+      <button class="sec" id="dpiDown">DPI −</button>
+      <button class="sec" id="dpiUp">DPI ＋</button>
+      <button class="sec" id="dpiReset">恢复 DPI</button>
+    </div>
+    <div class="note" id="dpiInfo">当前 DPI：读取中…</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const SIZE = 466;
+let points = [];
+let cur = null;
+
+$("stage").addEventListener("click", e => {
+  const r = $("shot").getBoundingClientRect();
+  // 换算回原始 466 尺寸
+  const x = Math.round((e.clientX - r.left) * SIZE / r.width);
+  const y = Math.round((e.clientY - r.top) * SIZE / r.height);
+  if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
+  cur = {x, y};
+  const m = $("marker");
+  m.style.display = "block";
+  m.style.left = x + "px";
+  m.style.top = y + "px";
+  $("coord").textContent = `X=${x}  Y=${y}`;
+  $("pname").focus();
+});
+
+$("add").onclick = () => {
+  if (!cur) { alert("先在图片上点一个位置"); return; }
+  const name = ($("pname").value || "").trim() || `点 ${points.length + 1}`;
+  points.push({name, x: cur.x, y: cur.y});
+  $("pname").value = "";
+  render();
+};
+
+$("clear").onclick = () => { points = []; $("marker").style.display = "none";
+  $("coord").textContent = "— 点一下图片 —"; render(); };
+
+function render(){
+  const box = $("points");
+  box.innerHTML = "";
+  points.forEach((p, i) => {
+    const d = document.createElement("div");
+    d.className = "pt";
+    d.innerHTML = `<span class="nm">${esc(p.name)}</span>
+      <span class="xy">(${p.x}, ${p.y})</span>`;
+    const b = document.createElement("button");
+    b.textContent = "删除";
+    b.onclick = () => { points.splice(i, 1); render(); };
+    d.appendChild(b);
+    box.appendChild(d);
+  });
+  $("out").value = points.map(p => `${p.name}\t${p.x}\t${p.y}`).join("\n");
+  $("applyLast").disabled = points.length === 0;
+  $("applyAll").disabled = points.length === 0;
+  renderQuick();
+}
+
+/* 快捷按钮：每个点位一个，点一下就按 */
+function renderQuick(){
+  const box = $("quick");
+  box.innerHTML = "";
+  if (!points.length){
+    box.innerHTML = '<div class="note" style="grid-column:1/-1">还没有点位</div>';
+    return;
+  }
+  points.forEach(p => {
+    const b = document.createElement("button");
+    b.textContent = p.name;
+    b.title = `(${p.x}, ${p.y})`;
+    b.onclick = async () => {
+      b.disabled = true;
+      b.classList.add("dis");
+      try {
+        const d = await tapAndRefresh(p.x, p.y);
+        if (!d.ok) alert(`点击失败：${d.error || d.out}`);
+      } catch(e){
+        alert("请求失败：" + e.message);
+      } finally {
+        b.disabled = false;
+        b.classList.remove("dis");
+      }
+    };
+    box.appendChild(b);
+  });
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function send(path, data){
+  const r = await fetch(path, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(data),
+  });
+  return r.json();
+}
+
+$("applyLast").onclick = async () => {
+  if (!points.length) return;
+  const p = points[points.length - 1];
+  const d = await tapAndRefresh(p.x, p.y);
+  alert(d.ok ? `已点击 (${p.x}, ${p.y})` : `失败：${d.error}`);
+};
+
+$("applyAll").onclick = async () => {
+  if (!points.length) return;
+  if (!confirm(`将依次点击 ${points.length} 个位置，间隔 1 秒，确定？`)) return;
+  const d = await send("/tap_all", {points});
+  setTimeout(refreshShot, 500);
+  alert(d.ok ? `完成，共点了 ${d.done} 个` : `失败：${d.error}`);
+};
+
+render();
+
+// 快速刷新：1 秒一次
+const REFRESH_MS = 1000;
+let timer = null;
+
+function refreshShot(){
+  const img = $("shot");
+  const next = new Image();
+  const url = "watch_now.png?_=" + Date.now();
+  next.onload = () => { img.src = url; };
+  next.onerror = () => { /* 本次失败就跳过，等下一轮 */ };
+  next.src = url;
+}
+
+function loop(){
+  refreshShot();
+  timer = setTimeout(loop, REFRESH_MS);
+}
+
+// 页面切到后台就暂停，省资源
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (timer) { clearTimeout(timer); timer = null; }
+  } else if (!timer) {
+    loop();
+  }
+});
+
+loop();
+
+// 点击后立刻刷新一次，不用等下一轮
+async function tapAndRefresh(x, y){
+  const d = await send("/tap", {x, y});
+  setTimeout(refreshShot, 300);
+  return d;
+}
+
+/* ---------- 保存 / 载入点位 ---------- */
+$("savePts").onclick = async () => {
+  if (!points.length) { alert("还没有点位"); return; }
+  const btn = $("savePts");
+  btn.disabled = true;
+  btn.textContent = "保存中…";
+  try {
+    const d = await send("/save_points", {points});
+    if (!d.ok) { alert("保存失败"); return; }
+    if (d.synced) {
+      alert(`✅ 已保存 ${d.count} 个点位\n${d.sync_msg}\n\n手表悬浮窗刷新后即可看到新按钮`);
+    } else {
+      alert(`⚠ 已保存到本地（${d.count} 个点位）\n但未同步到服务器：\n${d.sync_msg || "未知原因"}`);
+    }
+  } catch(e) {
+    alert("保存失败：" + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "💾 保存点位";
+  }
+};
+
+$("loadPts").onclick = async () => {
+  const r = await fetch("/points");
+  const d = await r.json();
+  if (!d.points || !d.points.length) { alert("没有保存过点位"); return; }
+  points = d.points;
+  render();
+  alert(`已载入 ${points.length} 个点位`);
+};
+
+/* ---------- DPI 控制 ---------- */
+async function dpiSet(mode){
+  const d = await send("/dpi", {mode});
+  if (d.ok) $("dpiInfo").textContent = "当前 DPI：" + d.density;
+  else alert("失败：" + d.error);
+  setTimeout(refreshShot, 500);
+  return d;
+}
+
+async function dpiRefresh(){
+  const r = await fetch("/dpi");
+  const d = await r.json();
+  if (d.ok) $("dpiInfo").textContent = "当前 DPI：" + d.density;
+}
+
+$("dpiDown").onclick = () => dpiSet("down");
+$("dpiUp").onclick = () => dpiSet("up");
+$("dpiReset").onclick = () => dpiSet("reset");
+
+dpiRefresh();
+
+// 显示当前配置
+(async () => {
+  try {
+    const r = await fetch("/config");
+    const d = await r.json();
+    const bar = $("cfgbar");
+    const dot = (ok) => `<span class="dot ${ok ? 'ok' : 'bad'}"></span>`;
+    let html = '';
+    html += `${dot(!!d.device)} 设备 ${d.device || '未连接'}`;
+    html += ` &nbsp;|&nbsp; ${dot(!!d.has_key)} 同步到 ${d.server || '未配置'}`;
+    if (d.sync_app) html += ` &nbsp;·&nbsp; 应用 ${d.sync_app}`;
+    else html += ` &nbsp;·&nbsp; 全局`;
+    bar.innerHTML = html;
+  } catch(e) {
+    $("cfgbar").textContent = "读取配置失败：" + e.message;
+  }
+})();
+
+// 打开页面自动载入已保存的点位
+(async () => {
+  try {
+    const r = await fetch("/points");
+    const d = await r.json();
+    if (d.points && d.points.length){
+      points = d.points;
+      render();
+    }
+  } catch(e){ /* 忽略 */ }
+})();
+</script>
+</body>
+</html>
