@@ -199,7 +199,9 @@ def key_home() -> tuple[bool, str]:
 
 # ---------- 点位配置 ----------
 
-POINTS_FILE = Path("/home/hina/.config/biliauto/watch_points.json")
+CONFIG_HOME = Path(os.environ.get(
+    "BILIAUTO_HOME", str(Path.home() / ".config" / "biliauto")))
+POINTS_FILE = CONFIG_HOME / "watch_points.json"
 
 
 def load_points() -> dict:
@@ -325,7 +327,7 @@ def set_ime(ime_id: str) -> tuple[bool, str]:
 
 def rollback_info() -> dict | None:
     """读取备份的原始状态。"""
-    p = Path("/home/hina/.config/biliauto/watch_rollback.txt")
+    p = CONFIG_HOME / "watch_rollback.txt"
     if not p.exists():
         return None
     d = {}
