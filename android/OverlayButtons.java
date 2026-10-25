@@ -410,6 +410,11 @@ public class OverlayButtons {
                 b.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
+                        // 顺序很重要：**先收起面板，再转发点击**。
+                        // 面板是铺满全屏的悬浮窗，如果还盖在上面，
+                        // 后面注入的 tap 会落在悬浮窗上，被当成"点空白处收起"，
+                        // 最终表现为点不动 / 反而退出。
+                        collapse();
                         if (listener != null) listener.onOverlayTap(nm, tx, ty);
                         flash(v);
                     }

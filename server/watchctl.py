@@ -20,16 +20,63 @@ from pathlib import Path
 
 log = logging.getLogger("biliauto.watchctl")
 
+# 手表的 ADB 地址。
+# 蜂窝网络的 IPv6 是动态分配的，会变 —— 所以这里是个可变的全局变量，
+# 由 learn_watch_ip() 在手表访问服务器时自动校正。
 WATCH_ADDR = "[YOUR_WATCH_IPV6]:5555"
 DEFAULT_DPI = 120
 
 _lock = threading.Lock()
+# 最近一次自动学习的地址，避免同一次访问里反复触发重连
+_last_learned = ""
+
+
+def learn_watch_ip(ip: str) -> None:
+    """用手表访问服务器时的来源 IP，自动更新 ADB 目标地址。
+
+    手表每次打开 App 都会请求服务器，这时候的源地址就是它当前的地址。
+    如果和记录的不一致，说明 IPv6 变了，这里自动改正并重连。
+    """
+    global WATCH_ADDR, _last_learned
+
+    if not ip or ip.startswith(("127.", "::1", "::ffff:127.")):
+        return
+
+    # 本地网段的 IPv6 不太可能是手表的可路由地址，跳过
+    if ip.startswith(("fe80", "fd", "fc")):
+        return
+
+    new_addr = f"[{ip}]:5555"
+    if new_addr == WATCH_ADDR:
+        return
+    if new_addr == _last_learned:
+        return
+
+    old = WATCH_ADDR
+    WATCH_ADDR = new_addr
+    _last_learned = new_addr
+    log.info("手表地址更新: %s -> %s（来源自动学习）", old, new_addr)
+
+    # 后台重连，不阻塞当前请求
+    def _reconnect() -> None:
+        try:
+            subprocess.run(["adb", "disconnect", old],
+                           capture_output=True, timeout=5)
+            subprocess.run(["adb", "connect", new_addr],
+                           capture_output=True, timeout=8)
+            log.info("已重新连接 %s", new_addr)
+        except Exception:  # noqa: BLE001
+            log.debug("自动重连失败", exc_info=True)
+
+    threading.Thread(target=_reconnect, daemon=True).start()
 
 
 def _adb(*args: str, timeout: int = 20) -> tuple[int, str]:
     with _lock:
         try:
-            r = subprocess.run(["adb", "-s", WATCH_ADDR, *args],
+            # 每次都读最新的 WATCH_ADDR（可能被 learn_watch_ip 改过）
+            addr = globals()["WATCH_ADDR"]
+            r = subprocess.run(["adb", "-s", addr, *args],
                                capture_output=True, text=True, timeout=timeout)
             return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
         except subprocess.TimeoutExpired:
@@ -81,7 +128,17 @@ def set_density(value: int | None) -> tuple[bool, int | None]:
 
 
 def tap(x: int, y: int) -> tuple[bool, str]:
+    """注入点击。
+
+    这里必须自己判断成败：`adb -s xxx shell ...` 在设备不存在时，
+    有些 adb 版本仍返回 0，只是往 stderr 打一句 not found。
+    不检查的话就会出现"接口返回 200 但什么都没点"的假成功。
+    """
+    if not ensure_connected():
+        return False, f"手表未连接（{WATCH_ADDR}），无法注入点击"
     code, out = _adb("shell", "input", "tap", str(int(x)), str(int(y)))
+    if "not found" in out.lower() or "error" in out.lower():
+        return False, out
     return code == 0, out
 
 
@@ -142,11 +199,7 @@ def key_home() -> tuple[bool, str]:
 
 # ---------- 点位配置 ----------
 
-# 配置目录：默认在当前用户的 ~/.config/biliauto，
-# 可用环境变量 BILIAUTO_HOME 覆盖
-CONFIG_HOME = Path(os.environ.get(
-    "BILIAUTO_HOME", str(Path.home() / ".config" / "biliauto")))
-POINTS_FILE = CONFIG_HOME / "watch_points.json"
+POINTS_FILE = Path("/home/hina/.config/biliauto/watch_points.json")
 
 
 def load_points() -> dict:
@@ -272,7 +325,7 @@ def set_ime(ime_id: str) -> tuple[bool, str]:
 
 def rollback_info() -> dict | None:
     """读取备份的原始状态。"""
-    p = CONFIG_HOME / "watch_rollback.txt"
+    p = Path("/home/hina/.config/biliauto/watch_rollback.txt")
     if not p.exists():
         return None
     d = {}

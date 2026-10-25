@@ -44,25 +44,10 @@ import android.util.Log;
  */
 public class MainActivity extends Activity {
 
-    // ================================================================
-    // ⚠️ 配置区：下面 3 个值必须改成你自己的，否则连不上服务器
-    //
-    // 详细说明见项目根目录的 SETUP.md
-    // ================================================================
-
-    // 【必改】服务器地址
-    // IPv6 要用方括号包起来；局域网 IP 不用括号
-    //   例： "https://[2408:8207:1234:5678::1]:8788"
-    //        "https://192.168.1.100:8788"
+    // ======== 配置 ========
     private static final String BASE_URL = "https://[YOUR_SERVER_IPV6]:8788";
-
-    // 【必改】网页访问口令，自己编一串随机字符即可
-    // 生成方法：python3 -c "import secrets; print(secrets.token_hex(12))"
     private static final String TOKEN = "YOUR_WATCH_TOKEN";
-
-    // 【必改】配对密钥，用于给服务器接口签名
-    // 取服务器上 ~/.config/biliauto/pairing.key 的完整 64 位内容
-    // 查看方法：cat ~/.config/biliauto/pairing.key
+    // 配对密钥，用于给 Pi 的接口签名
     private static final String KEY = "YOUR_PAIRING_KEY";
     private static final String PAGE = BASE_URL + "/watch?t=" + TOKEN;
 
@@ -513,10 +498,18 @@ public class MainActivity extends Activity {
         @Override
         public void onOverlayTap(String name, int x, int y) {
             Log.i("BiliOverlay", "点击 " + name + " (" + x + "," + y + ")");
-            new Thread(new Runnable() {
+            // 延迟一小会儿再注入：面板虽然已经收起，但窗口从全屏缩回浮球
+            // 需要时间生效。太早注入的话，点击会落在残留的悬浮窗上，
+            // 表现为点不动，或者被当成"点空白处"而收起。
+            ui.postDelayed(new Runnable() {
                 @Override
-                public void run() { sendTapToPi(name, x, y); }
-            }).start();
+                public void run() {
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() { sendTapToPi(name, x, y); }
+                    }).start();
+                }
+            }, 180);
         }
 
         @Override
