@@ -4,222 +4,199 @@
 
 ## Overview
 
-Watch Control is a technical demonstration of coordinating a desktop browser, a
-small relay server, and an Android watch. It allows a user to select coordinates
-on a captured screenshot of the watch, persist those coordinates on a server,
-and then invoke them from a floating overlay rendered on the watch itself.
+Watch Control lets you pick coordinates on a screenshot of your Android watch,
+save them to a small relay service, and then tap them from a floating overlay on
+the watch itself.
 
-The project serves as a reference implementation for several techniques that are
-often useful when working with wearables: Android overlay windows, the ADB
-debugging interface, bidirectional communication between a WebView and native
-code, HMAC-based request signing, and trusting self-signed certificates within
-an Android application.
+It is useful when a watch screen is too small to reliably hit certain buttons:
+you select the spot on a desktop screen where you can see it clearly, and the
+watch gets a corresponding button.
 
-## Important notes
+The project is a technical demonstration and reference implementation. It
+covers Android overlay windows, the ADB debugging interface, WebView ↔ native
+bridging, HMAC request signing, and trusting self-signed certificates inside an
+Android app.
 
-This is a demonstration project intended for study and experimentation. It is
-not a finished product, and it is provided without any guarantee of correctness,
-stability, or fitness for a particular purpose.
+## What you need
 
-The techniques demonstrated involve system-level operations — enabling ADB,
-adjusting display density, injecting input events, and installing third-party
-applications. These operations carry inherent risk. On some devices they may
-result in data loss, loss of warranty coverage, or unexpected system behaviour.
-If you intend to experiment, please do so on a device you own and can afford to
-lose.
+| Item | Notes |
+|---|---|
+| An Android watch | With ADB debugging enabled and wireless debugging on |
+| A computer | Runs the desktop picker; has Node? no — just Python 3.9+ and `adb` |
+| A relay machine | Can be the same computer; a Raspberry Pi works well for always-on use |
 
-Third-party platform automation may also conflict with the terms of service of
-those platforms. Please review and respect the applicable agreements before use.
+Python 3.9 or newer is required. No third-party packages: everything uses the
+standard library.
 
-You are responsible for how you use this project. The author does not accept
-liability for any consequences arising from its use.
+## Quick start
 
-## Architecture
-
-The system consists of three cooperating parts.
-
-```
-┌─────────────────┐    HTTPS + HMAC     ┌──────────────┐
-│ Desktop browser │ ──────────────────> │    Server    │
-│  tap-tool page  │  auto-sync on save  │  (Pi / NAS)  │
-└─────────────────┘                     └──────┬───────┘
-        │                                      │
-        │ USB / adb                            │ ADB over WiFi
-        ▼                                      ▼
-┌─────────────────┐                     ┌──────────────┐
-│ Watch (screen)  │ <─────────────────> │Watch overlay │
-└─────────────────┘                     └──────────────┘
-```
-
-| Directory | Purpose | Runs on |
-|---|---|---|
-| `android/` | Watch application; renders the overlay and forwards taps | Watch |
-| `tap-tool/` | Desktop tool; captures screenshots and records coordinates | Desktop |
-| `server/` | Relay service; stores configuration and issues ADB commands | Pi / NAS |
-
-## Getting started
-
-The repository uses placeholders wherever a value depends on your own
-environment. These must be replaced before the system will function.
-
-### Configuration placeholders
-
-| Placeholder | Location | How to obtain |
-|---|---|---|
-| `YOUR_SERVER_IPV6` | `android/MainActivity.java`, `network_security_config.xml` | `ip -6 addr show scope global` on the server |
-| `YOUR_WATCH_TOKEN` | `android/MainActivity.java` | Generate with `secrets.token_hex(12)` |
-| `YOUR_PAIRING_KEY` | `android/MainActivity.java` | Contents of `~/.config/biliauto/pairing.key` |
-| `YOUR_SERVER_HOST` | `tap-tool/env.sh` | Same address as above, without brackets |
-| `YOUR_DEVICE_SERIAL` | `ADB_SERIAL` environment variable | Listed by `adb devices` (optional) |
-| `WATCH_IPV6` | `server/watchctl.py` | The watch's own address, from `adb shell ip -6 addr show` |
-
-Running `python check_config.py` will list any placeholders that remain.
-
-### Preparing the server
-
-Generate a pairing key. This value authenticates requests between the watch
-application and the relay service.
+### 1. Generate a pairing key
 
 ```bash
-mkdir -p ~/.config/biliauto
+./run.sh setup          # Linux / macOS
+run.bat setup           # Windows
+```
+
+Or manually:
+
+```bash
+mkdir -p ~/.config/watch-control
 python3 -c "import secrets; print(secrets.token_hex(32))" \
-  > ~/.config/biliauto/pairing.key
-chmod 600 ~/.config/biliauto/pairing.key
+  > ~/.config/watch-control/pairing.key
+chmod 600 ~/.config/watch-control/pairing.key
 ```
 
-### Preparing the watch
-
-Enable ADB debugging in the watch's developer settings, then confirm the
-connection. The watch will display an authorization prompt the first time.
+### 2. Start the relay service
 
 ```bash
-adb devices                  # expect "device", not "unauthorized"
+./run.sh                # listens on 127.0.0.1:8787
+```
+
+The service prints its configuration on startup. Watch address is optional —
+the service learns it automatically from the watch's first request.
+
+### 3. Enable ADB on the watch
+
+```bash
+adb devices                  # should show "device", not "unauthorized"
 adb tcpip 5555               # enable network debugging
 adb connect <watch-ip>:5555  # verify
 ```
 
-### Certificates
+The watch shows an authorization prompt the first time — tap **Allow**.
 
-If the relay service uses a self-signed certificate, place it in the
-application resources:
-
-```bash
-cp server.crt android/res/raw/pi_cert.pem
-```
-
-The filename must remain `pi_cert.pem`, as it is referenced by
-`network_security_config.xml`. The APK should be rebuilt whenever the
-certificate is regenerated.
-
-If you are using a certificate issued by a public authority, this step can be
-skipped, as the system trust store is consulted by default.
-
-### Building the watch application
+### 4. Build and install the watch app
 
 ```bash
 cd android
-# Set BASE_URL, TOKEN, and KEY in MainActivity.java first
+python get_tools.py          # downloads build-tools and android.jar
+# Edit MainActivity.java: set BASE_URL, TOKEN, KEY
 python compile.py
 adb install -r watch-control.apk
 ```
 
-### Running the desktop tool
+If the relay runs on this computer and you connect over USB, you can point
+`BASE_URL` at your machine's LAN address:
 
-```bash
-cd tap-tool
-export ADB_PATH=/path/to/adb
-export ADB_SERIAL=your_watch_serial
-export BILIAUTO_SERVER=https://your-server:8788
-export BILIAUTO_KEY=$(cat ~/.config/biliauto/pairing.key)
-python serve.py
+```java
+private static final String BASE_URL = "https://192.168.1.100:8787";
 ```
 
-The interface is then available at <http://127.0.0.1:8765>.
+For a self-signed HTTPS certificate, place it at `res/raw/pi_cert.pem`.
+`network_security_config.xml` already references it. Re-package the APK
+whenever the certificate changes.
 
-### Recording coordinates
+### 5. Start the picker
 
-The left-hand side of the interface displays a live capture of the watch,
-refreshed approximately once per second. Clicking the image records the
-corresponding coordinate; assigning it a name and pressing **Record this point**
-adds it to the list. Once the list is complete, **Save points** writes the
-configuration locally and synchronises it with the relay service. The overlay on
-the watch will reflect the update after it is refreshed.
+```bash
+./run.sh picker
+```
 
-## Features
+Open <http://127.0.0.1:8765>. The left side shows a live screenshot of the
+watch. Click a spot, name it, press **Record this point**. When you are done,
+press **Save points** — the coordinates are written locally and pushed to the
+relay service.
 
-The desktop tool provides a live capture of the watch display, adjustable
-display density (320, 120, 100, or the system default), the ability to test any
-recorded coordinate directly, and automatic synchronisation with the relay
-service. Coordinates may be scoped to a specific package using
-`BILIAUTO_APP`.
+### 6. Use it on the watch
 
-The watch application presents a small draggable handle that expands into a ring
-of buttons arranged evenly around a circle. The radius adjusts as more points
-are added, with up to ten placed on the outer ring and any additional points on
-an inner ring. The handle itself occupies only 48 dp while collapsed, so it does
-not interfere with other applications.
+Open the app on the watch and tap the floating handle. A ring of buttons
+appears; tapping one sends the stored coordinate to the relay, which injects it
+back into the watch.
 
 ## Configuration
 
+All settings are environment variables. Defaults are sensible; you only need to
+set what differs.
+
 | Variable | Default | Description |
 |---|---|---|
-| `ADB_PATH` | `adb` | Path to the adb executable |
-| `ADB_SERIAL` | auto-detected | Target device serial |
-| `BILIAUTO_SERVER` | `https://YOUR_SERVER_HOST:8788` | Relay service address |
-| `BILIAUTO_KEY` | empty | Pairing key; synchronisation is disabled when empty |
-| `BILIAUTO_APP` | empty | Package the coordinates belong to |
+| `WC_HOME` | `~/.config/watch-control` | Where the key and points are stored |
+| `WATCH_ADDR` | auto-learned | `ip:port` of the watch; learned from requests |
+| `PAIRING_KEY` | from `pairing.key` | Shared secret used to sign requests |
+| `ADB_PATH` | `adb` | Path to the adb binary |
+| `WC_DEFAULT_DPI` | `120` | Density used by the "reset to my DPI" action |
+| `HOST` / `PORT` | `127.0.0.1` / `8787` | Relay listen address |
 
-## Security considerations
+| Variable | Default | Description |
+|---|---|---|
+| `BILIAUTO_SERVER` | `http://127.0.0.1:8787` | Relay address for the picker |
+| `BILIAUTO_KEY` | from `pairing.key` | Signing key for the picker |
+| `BILIAUTO_APP` | empty | Scope points to one package name |
+| `ADB_SERIAL` | auto | Device serial for the picker |
 
-Both communication paths use HTTPS. The desktop tool includes an SSL context
-that accepts self-signed certificates, which allows it to communicate with a
-private relay service that does not have a certificate from a public authority.
+## How it works
 
-Each request carries an HMAC-SHA256 signature in the `X-Bili-Sign` header.
+```
+┌─────────────────┐   HMAC-signed HTTP  ┌──────────────┐
+│ Desktop browser │ ──────────────────> │ Relay service│
+│   picker page   │   push on save      │  (Pi / PC)   │
+└─────────────────┘                     └──────┬───────┘
+                                               │ adb
+                                               │
+                                        ┌──────▼───────┐
+                                        │    Watch     │
+                                        │  (screen)    │
+                                        └──────┬───────┘
+                                               │ overlay
+                                        ┌──────▼───────┐
+                                        │Buttons on it │
+                                        └──────────────┘
+```
+
+The picker captures the watch over adb, writes coordinates, and pushes them to
+the relay. The watch app draws the overlay and, when a button is pressed,
+reports the coordinate back to the relay, which injects a tap at the same
+position on the watch.
+
+## Security
+
+Requests are signed with HMAC-SHA256 in the `X-Bili-Sign` header:
 
 ```
 HMAC-SHA256(pairing_key, METHOD + "\n" + PATH + "\n" + BODY)  as hex
 ```
 
-The pairing key consists of the 64 ASCII characters stored in `pairing.key`, not
-the 32 bytes that result from interpreting it as hexadecimal. The path excludes
-any query string. The key file should be readable only by its owner.
+The key is the 64 ASCII characters in `pairing.key`, not the 32 bytes obtained
+by hex-decoding it. The path excludes the query string.
 
-The desktop tool listens on `127.0.0.1` only, and the overlay permission on the
-watch must be granted manually by the user.
+The relay listens on `127.0.0.1` by default. Binding it publicly without a
+reverse proxy and TLS is not recommended.
+
+The watch address is learned from incoming requests, which lets it follow
+dynamic IPv6 reassignment on cellular networks. If you prefer a fixed address,
+set `WATCH_ADDR` and it will be used when no request has arrived yet.
 
 ## Known limitations
 
-Older WebView implementations, such as version 83, do not expose
-`crypto.subtle` outside of a secure context. Signing therefore prefers the Java
-bridge, with a pure-JavaScript SHA-256 implementation as a fallback.
+The overlay cannot cover the system UI or full-screen apps that opt out of
+overlays. Some vendor ROMs are stricter than stock Android; if the overlay does
+not show, check that "Display over other apps" is allowed.
 
-Changing the display density alters the logical dimensions of the screen, after
-which the handle position is clamped back into range rather than snapped to an
-edge.
+Changing display density changes the logical screen size. The floating handle
+is clamped back into range rather than snapped to an edge.
 
-When the watch display sleeps, the application is moved to the background and
-the page stops refreshing.
+On WebView versions older than 90, `crypto.subtle` is unavailable in insecure
+contexts. The watch app derives its signature through a Java bridge instead, so
+this only matters if you remove that bridge.
 
 ## Troubleshooting
 
-If the watch application remains on "connecting", the certificate is likely
-missing from the APK. A self-signed certificate fails during the TLS handshake,
-which means the `onReceivedSslError` callback is never reached, so the
-application cannot recover on its own.
+**The watch app stays on "connecting".**
+The certificate is probably missing from the APK. A self-signed certificate
+fails during the TLS handshake, so `onReceivedSslError` never fires. Check that
+`res/raw/pi_cert.pem` exists and rebuild.
 
-If tapping an overlay button has no effect, check that `WATCH_ADDR` in
-`server/watchctl.py` is correct and that network debugging is enabled on the
-watch.
+**Tapping a button does nothing.**
+`WATCH_ADDR` is wrong or network debugging is off. Run `adb devices` on the
+relay machine; the watch should appear as `device`.
 
-If the status indicator is red, either the key is incorrect or the service is
-unreachable.
+**Points do not appear in the overlay.**
+Press **Save points** in the picker, then refresh the overlay. The picker's
+status bar shows whether it reached the relay.
 
-```bash
-curl -k https://your-server:8788/api/watch/points
-# 401 indicates a key mismatch
-# a timeout indicates a network problem
-```
+**Requests return 401.**
+The key is wrong. Compare `pairing.key` on the relay with the value the picker
+uses.
 
 ## License
 

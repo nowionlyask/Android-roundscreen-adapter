@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """编译 Java -> dex -> 打包 APK。
 
-流程：javac 编译 -> d8 转 dex -> build_apk.py 打包签名
+流程：javac 编译 -> dx 转 dex -> build_apk.py 打包签名
+
+依赖：JDK（javac）+ Android build-tools（放在 tools/ 目录下）
+跨平台：Windows / Linux / macOS 都可以跑。
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -16,9 +20,8 @@ CLS = BUILD / "classes"
 
 
 def run(cmd, label, check=True):
-    print(f"=== {label} ===")
-    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
-                       shell=isinstance(cmd, str))
+    print("=== {} ===".format(label))
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
         print("  [失败] 返回码", r.returncode)
         print("  STDERR:", r.stderr[:1500])
@@ -31,6 +34,19 @@ def run(cmd, label, check=True):
     return True
 
 
+def find_java8():
+    """dx.jar 在老版本 JDK 上更稳，优先用 Java 8。
+
+    没有就退回系统默认 java（新版 JDK 上 dx 可能会崩，但先试）。
+    """
+    env = os.environ.get("JAVA8_HOME")
+    if env:
+        p = Path(env) / "bin" / ("java.exe" if os.name == "nt" else "java")
+        if p.exists():
+            return str(p)
+    return "java"
+
+
 def main():
     if BUILD.exists():
         shutil.rmtree(BUILD)
@@ -38,30 +54,42 @@ def main():
 
     # 1. javac
     java_files = sorted(WS.glob("*.java"))
-    print(f"源文件: {[f.name for f in java_files]}")
+    if not java_files:
+        print("[失败] 当前目录没有 .java 文件")
+        return 1
+    print("源文件:", [f.name for f in java_files])
+
     cmd = [
         "javac",
-        "-source", "8", "-target", "8",
-        "-bootclasspath", str(PLATFORM),
+        "--release", "8",
+        "-classpath", str(PLATFORM),
         "-encoding", "UTF-8",
         "-d", str(CLS),
-        *[str(f) for f in java_files],
     ]
+    cmd += [str(f) for f in java_files]
     run(cmd, "javac 编译")
 
-    # 2. d8 -> dex
+    # 2. dx -> dex
     class_files = list(CLS.rglob("*.class"))
-    print(f"编译产物: {len(class_files)} 个 class")
-    d8 = BT / "d8.bat"
+    print("编译产物: {} 个 class".format(len(class_files)))
+    dx = BT / "lib" / "dx.jar"
+    if not dx.exists():
+        print("[失败] 找不到 tools/bt/android-11/lib/dx.jar")
+        return 1
+
     dex_out = WS / "classes.dex"
     if dex_out.exists():
         dex_out.unlink()
-    run([str(d8), "--output", str(WS), "--lib", str(PLATFORM),
-         *[str(c) for c in class_files]], "d8 转 dex")
+
+    run([find_java8(), "-cp", str(dx),
+         "com.android.dx.command.Main",
+         "--dex", "--output={}".format(dex_out)]
+        + [str(c) for c in class_files], "dx 转 dex")
+
     if not dex_out.exists():
         print("[失败] classes.dex 没生成")
         return 1
-    print(f"classes.dex: {dex_out.stat().st_size} 字节")
+    print("classes.dex: {} 字节".format(dex_out.stat().st_size))
 
     # 3. 打包
     run([sys.executable, str(WS / "build_apk.py")], "打包 APK")

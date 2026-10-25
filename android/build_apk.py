@@ -17,6 +17,15 @@ DEX = WS / "classes.dex"
 KS = WS / "keystore.jks"
 
 
+def _exe(stem: str) -> str:
+    """按当前平台补上可执行文件后缀。"""
+    import os
+    import sys
+    if sys.platform == "win32":
+        return str(BT / (stem + ".exe"))
+    return str(BT / stem)
+
+
 def run(cmd, label):
     print(f"=== {label} ===")
     r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
@@ -34,20 +43,20 @@ def main():
         shutil.rmtree(BUILD)
     BUILD.mkdir(parents=True)
 
-    aapt2 = BT / "aapt2.exe"
-    zipalign = BT / "zipalign.exe"
+    aapt2 = _exe("aapt2")
+    zipalign = _exe("zipalign")
     apksigner = BT / "lib" / "apksigner.jar"
 
     # 1. compile res
     res_zip = BUILD / "res.zip"
-    ok = run([str(aapt2), "compile", "--dir", str(WS / "res"), "-o", str(res_zip)], "compile res")
+    ok = run([aapt2, "compile", "--dir", str(WS / "res"), "-o", str(res_zip)], "compile res")
     if not ok:
         return 1
 
     # 2. link
     base = BUILD / "base.apk"
     ok = run([
-        str(aapt2), "link",
+        aapt2, "link",
         "-I", str(PLATFORM),
         "--manifest", str(WS / "AndroidManifest.xml"),
         "-R", str(res_zip),
@@ -82,8 +91,8 @@ def main():
     ok = run([
         "java", "-jar", str(apksigner), "sign",
         "--ks", str(KS),
-        "--ks-pass", "pass:biliauto123",
-        "--key-pass", "pass:biliauto123",
+        "--ks-pass", "pass:watchcontrol",
+        "--key-pass", "pass:watchcontrol",
         "--v1-signing-enabled", "true",
         "--v2-signing-enabled", "true",
         "--out", str(signed),
