@@ -198,6 +198,24 @@ status bar shows whether it reached the relay.
 The key is wrong. Compare `pairing.key` on the relay with the value the picker
 uses.
 
+## Risks and disclaimer
+
+This is a technical demonstration, provided for study and experimentation. It
+is not a finished product, and no warranty of any kind is given.
+
+The techniques it demonstrates operate at the system level — enabling ADB,
+changing display density, injecting input events, and installing applications.
+These carry inherent risk. On some devices they may cause data loss, render the
+system unstable, or void the warranty. Please experiment only on a device you
+own and can afford to lose.
+
+Automating third-party applications may also conflict with their terms of
+service. Review and respect those agreements before use.
+
+You are responsible for how you use this project. The author accepts no
+liability for any consequences arising from its use. The full text is in the
+[MIT License](LICENSE), whose warranty disclaimer applies in full.
+
 ## License
 
 Released under the [MIT License](LICENSE).
