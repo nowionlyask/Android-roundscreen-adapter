@@ -441,12 +441,71 @@ def load_key() -> str:
     return ""
 
 
+def ensure_self_signed() -> tuple[str, str]:
+    """生成（或复用）自签名证书，返回 (cert, key) 路径。
+
+    证书放在配置目录下，只在不存在时生成。
+    用 openssl 命令行生成，避免引入 Python 的加密库依赖。
+    """
+    cert = CONFIG_HOME / "server.crt"
+    key = CONFIG_HOME / "server.key"
+
+    if cert.exists() and key.exists():
+        log.info("复用已有自签名证书: %s", cert)
+        return str(cert), str(key)
+
+    import shutil
+    import subprocess as sp
+
+    openssl = shutil.which("openssl")
+    if not openssl:
+        print("[!] 找不到 openssl，无法生成自签名证书")
+        print("    Windows 可以安装 Git for Windows，或用 WSL")
+        print("    也可以手动指定 --tls-cert / --tls-key")
+        raise SystemExit(1)
+
+    CONFIG_HOME.mkdir(parents=True, exist_ok=True)
+    print("[*] 生成自签名证书（有效期 10 年）...")
+
+    cmd = [
+        openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", str(key), "-out", str(cert),
+        "-days", "3650",
+        "-subj", "/CN=watch-control",
+        "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+    ]
+    r = sp.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        # 老版本 openssl 没有 -addext
+        cmd = cmd[:-2]
+        r = sp.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print("[!] 生成失败:", r.stderr[:300])
+            raise SystemExit(1)
+
+    try:
+        os.chmod(key, 0o600)
+    except Exception:  # noqa: BLE001
+        pass
+
+    print("[+] 证书: {}".format(cert))
+    print("[+] 私钥: {}（请勿外传）".format(key))
+    print("[!] 把证书复制到 APK 资源目录以下使其被信任:")
+    print("    cp {} android/res/raw/pi_cert.pem".format(cert))
+    return str(cert), str(key)
+
+
 def main() -> int:
     global PAIRING_KEY, WATCH_ADDR
 
     ap = argparse.ArgumentParser(description="Watch Control 中转服务")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址")
-    ap.add_argument("--port", type=int, default=8787, help="监听端口")
+    ap.add_argument("--port", type=int, default=0,
+                    help="监听端口（默认 http 8787 / https 8788）")
+    ap.add_argument("--tls-cert", default="", help="TLS 证书路径（启用 HTTPS）")
+    ap.add_argument("--tls-key", default="", help="TLS 私钥路径")
+    ap.add_argument("--self-signed", action="store_true",
+                    help="自动生成自签名证书并启用 HTTPS")
     ap.add_argument("--verbose", action="store_true", help="输出详细日志")
     args = ap.parse_args()
 
@@ -457,6 +516,16 @@ def main() -> int:
     PAIRING_KEY = load_key()
     CONFIG_HOME.mkdir(parents=True, exist_ok=True)
 
+    # ---- TLS 准备 ----
+    cert_path = args.tls_cert
+    key_path = args.tls_key
+
+    if args.self_signed:
+        cert_path, key_path = ensure_self_signed()
+
+    use_tls = bool(cert_path and key_path)
+    port = args.port or (8788 if use_tls else 8787)
+
     print("=" * 56)
     print("  Watch Control 中转服务")
     print("=" * 56)
@@ -465,12 +534,21 @@ def main() -> int:
     print("  配对密钥 : {}".format("已配置" if PAIRING_KEY else "未配置（不鉴权）"))
     print("  配置目录 : {}".format(CONFIG_HOME))
     print("  点位数   : {}".format(len(load_points().get("global") or [])))
+    print("  协议     : {}".format("HTTPS" if use_tls else "HTTP"))
     print()
-    print("  监听 http://{}:{}".format(args.host, args.port))
+    print("  监听 {}://{}:{}".format(
+        "https" if use_tls else "http", args.host, port))
     print("  按 Ctrl+C 停止")
     print("=" * 56)
 
-    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    srv = ThreadingHTTPServer((args.host, port), Handler)
+
+    if use_tls:
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert_path, key_path)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
