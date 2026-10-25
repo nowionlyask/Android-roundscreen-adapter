@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-WS = Path(r"C:\Users\wcx\RaspBerryPi\biliremote\android")
+WS = Path(__file__).resolve().parent
 BT = WS / "tools" / "bt" / "android-11"
 PLATFORM = WS / "tools" / "pf" / "android-11" / "android.jar"
 BUILD = WS / "build"

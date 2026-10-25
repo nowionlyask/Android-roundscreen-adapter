@@ -55,6 +55,8 @@ public class OverlayButtons {
     private WindowManager.LayoutParams lp;
     private List<JSONObject> points = new ArrayList<JSONObject>();
     private boolean isOpen = false;
+    // 点位数据在下发后有变更、但界面还没重建时为 true
+    private boolean pointsDirty = false;
 
     private int dragStartX, dragStartY, ballStartX, ballStartY;
     private boolean dragging = false;
@@ -73,9 +75,20 @@ public class OverlayButtons {
 
     public boolean isShowing() { return root != null; }
 
+    /**
+     * 更新点位数据。
+     *
+     * 无论面板是否展开都要标记数据已变更 —— 否则 App 重启后页面先下发点位、
+     * 用户再展开面板时，展开逻辑拿不到最新数据（或者重建了一次又被覆盖）。
+     * 这里同时处理两种时序：数据先到、面板后开；以及面板已开时热更新。
+     */
     public void setPoints(List<JSONObject> pts) {
         this.points = pts == null ? new ArrayList<JSONObject>() : pts;
-        if (isOpen) rebuildExpanded();
+        this.pointsDirty = true;
+        if (isOpen) {
+            rebuildExpanded();
+            pointsDirty = false;
+        }
     }
 
     private int dp(int v) {
@@ -281,12 +294,13 @@ public class OverlayButtons {
         });
 
         rebuildExpanded();
+        pointsDirty = false;
         root.addView(expanded, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
         try { wm.updateViewLayout(root, lp); } catch (Exception e) { Log.e(TAG, "expand", e); }
-        Log.i(TAG, "已展开");
+        Log.i(TAG, "已展开，共 " + points.size() + " 个点位");
     }
 
     private void collapse() {

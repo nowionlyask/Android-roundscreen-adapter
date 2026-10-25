@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import subprocess
 import threading
@@ -21,22 +20,7 @@ from pathlib import Path
 
 log = logging.getLogger("biliauto.watchctl")
 
-# ================================================================
-# ⚠️ 【必改】手表的 ADB 地址
-#
-# 这是**手表**的 IP，不是服务器的。
-# IPv6 要加方括号，局域网 IP 不用（但端口必须写 :5555）
-#   例： "[2408:8478:xxx:xxxx::1]:5555"
-#        "192.168.1.50:5555"
-#
-# 获取方法：
-#   手表 USB 连着时执行： adb shell ip -6 addr show | grep inet6
-#   然后在手表上开启网络调试： adb tcpip 5555
-#
-# 也可以用环境变量覆盖，不用改代码：
-#   export WATCH_ADDR="192.168.1.50:5555"
-# ================================================================
-WATCH_ADDR = os.environ.get("WATCH_ADDR", "[WATCH_IPV6]:5555")
+WATCH_ADDR = "[YOUR_WATCH_IPV6]:5555"
 DEFAULT_DPI = 120
 
 _lock = threading.Lock()
@@ -55,14 +39,23 @@ def _adb(*args: str, timeout: int = 20) -> tuple[int, str]:
 
 
 def ensure_connected() -> bool:
-    """确保 adb 连着手表。断了就重连。"""
-    code, out = _adb("get-state", timeout=8)
+    """确保 adb 连着手表。断了就重连。
+
+    超时设得比较短：手表可能通过 USB 连接而不是 WiFi，
+    这时 adb connect 会一直等到超时，拖慢整个请求。
+    """
+    code, out = _adb("get-state", timeout=4)
     if code == 0 and "device" in out:
         return True
-    # 尝试重连
-    subprocess.run(["adb", "connect", WATCH_ADDR],
-                   capture_output=True, timeout=20)
-    code, out = _adb("get-state", timeout=8)
+
+    # 尝试重连（短超时，避免卡住调用方）
+    try:
+        subprocess.run(["adb", "connect", WATCH_ADDR],
+                       capture_output=True, timeout=6)
+    except subprocess.TimeoutExpired:
+        log.debug("adb connect 超时: %s", WATCH_ADDR)
+
+    code, out = _adb("get-state", timeout=4)
     return code == 0 and "device" in out
 
 
@@ -149,7 +142,11 @@ def key_home() -> tuple[bool, str]:
 
 # ---------- 点位配置 ----------
 
-POINTS_FILE = Path("/home/hina/.config/biliauto/watch_points.json")
+# 配置目录：默认在当前用户的 ~/.config/biliauto，
+# 可用环境变量 BILIAUTO_HOME 覆盖
+CONFIG_HOME = Path(os.environ.get(
+    "BILIAUTO_HOME", str(Path.home() / ".config" / "biliauto")))
+POINTS_FILE = CONFIG_HOME / "watch_points.json"
 
 
 def load_points() -> dict:
@@ -192,19 +189,33 @@ def points_for_app(package: str) -> list[dict]:
 
 
 def status() -> dict:
-    """给 App 和浏览器用的完整状态。"""
-    if not ensure_connected():
-        return {"ok": False, "error": "adb 未连接手表"}
-    cur = current_density()
-    return {
+    """给 App 和浏览器用的完整状态。
+
+    注意：**点位数据不依赖 ADB 连接**。
+    手表可能通过 USB 而不是 WiFi 连接，或者暂时掉线，
+    这时候 App 仍然需要拿到点位渲染悬浮按钮。
+    所以 ADB 相关的字段探测失败时降级返回，不抛错、不阻塞。
+    """
+    # 点位和输入法列表纯粹读文件/本地配置，永远可用
+    out = {
         "ok": True,
-        "connected": True,
-        "density": cur,
+        "connected": False,
+        "density": None,
         "default_dpi": DEFAULT_DPI,
-        "front": app_info(),
+        "front": {},
         "points": load_points(),
-        "ime": ime_status(),
     }
+
+    # ADB 探测可能很慢（连不上要等超时），失败就降级
+    try:
+        if ensure_connected():
+            out["connected"] = True
+            out["density"] = current_density()
+            out["front"] = app_info() or {}
+    except Exception:  # noqa: BLE001
+        log.debug("ADB 探测失败，点位仍照常返回", exc_info=True)
+
+    return out
 
 
 # ---------- 输入法 ----------
@@ -261,7 +272,7 @@ def set_ime(ime_id: str) -> tuple[bool, str]:
 
 def rollback_info() -> dict | None:
     """读取备份的原始状态。"""
-    p = Path("/home/hina/.config/biliauto/watch_rollback.txt")
+    p = CONFIG_HOME / "watch_rollback.txt"
     if not p.exists():
         return None
     d = {}
